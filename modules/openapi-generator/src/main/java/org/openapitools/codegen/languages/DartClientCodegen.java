@@ -23,6 +23,7 @@ import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.openapitools.codegen.*;
 import org.openapitools.codegen.utils.ModelUtils;
+import org.openapitools.codegen.utils.ProcessUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,6 +42,39 @@ public class DartClientCodegen extends DefaultCodegen implements CodegenConfig {
     public static final String PUB_DESCRIPTION = "pubDescription";
     public static final String USE_ENUM_EXTENSION = "useEnumExtension";
     public static final String SUPPORT_DART2 = "supportDart2";
+    public static final String NULLABLE_FIELDS = "nullableFields";
+
+    // -- dart jaguar
+    private static final String SERIALIZATION_FORMAT = "serialization";
+    private static final String IS_FORMAT_JSON = "jsonFormat";
+    private static final String IS_FORMAT_PROTO = "protoFormat";
+    private static final String CLIENT_NAME = "clientName";
+
+    private static Set<String> modelToIgnore = new HashSet<>();
+    private HashMap<String, String> protoTypeMapping = new HashMap<>();
+
+    // -- dart dio
+    //private static final String IS_FORMAT_JSON = "jsonFormat";
+    //private static final String CLIENT_NAME = "clientName";
+
+    static {
+        modelToIgnore.add("datetime");
+        modelToIgnore.add("map");
+        modelToIgnore.add("object");
+        modelToIgnore.add("list");
+        modelToIgnore.add("file");
+        modelToIgnore.add("uint8list");
+    }
+
+    private static final String SERIALIZATION_JSON = "json";
+    private static final String SERIALIZATION_PROTO = "proto";
+
+    private boolean nullableFields = true;
+    private String serialization = SERIALIZATION_JSON;
+
+    // -- end
+
+
     protected boolean browserClient = true;
     protected String pubName = "openapi";
     protected String pubVersion = "1.0.0";
@@ -51,6 +85,10 @@ public class DartClientCodegen extends DefaultCodegen implements CodegenConfig {
     protected String modelDocPath = "docs" + File.separator;
     protected String apiTestPath = "test" + File.separator;
     protected String modelTestPath = "test" + File.separator;
+
+    public static final String HTTP = "http";
+    public static final String DIO = "dio";
+    public static final String JAGUAR = "jaguar";
 
     public DartClientCodegen() {
         super();
@@ -126,6 +164,62 @@ public class DartClientCodegen extends DefaultCodegen implements CodegenConfig {
         cliOptions.add(new CliOption(USE_ENUM_EXTENSION, "Allow the 'x-enum-values' extension for enums"));
         cliOptions.add(new CliOption(CodegenConstants.SOURCE_FOLDER, "Source folder for generated code"));
         cliOptions.add(CliOption.newBoolean(SUPPORT_DART2, "Support Dart 2.x (Dart 1.x support has been deprecated)").defaultValue(Boolean.TRUE.toString()));
+
+        supportedLibraries.put(HTTP, "http: https://pub.dev/packages/http");
+        supportedLibraries.put(DIO, "dio: https://pub.dev/packages/dio");
+        supportedLibraries.put(JAGUAR, "jaguar: https://pub.dev/packages/jaguar");
+
+        CliOption libraryOption = new CliOption(CodegenConstants.LIBRARY, "library template (sub-template) to use");
+        libraryOption.setEnum(supportedLibraries);
+        // set http as the default
+        libraryOption.setDefault(HTTP);
+        cliOptions.add(libraryOption);
+        setLibrary(HTTP);
+    }
+
+    public void dartDioConstrutor() {
+        browserClient = false;
+        outputFolder = "generated-code/dart-dio";
+        embeddedTemplateDir = templateDir = "dart-dio";
+
+        //no tests at this time
+        modelTestTemplateFiles.clear();
+        apiTestTemplateFiles.clear();
+    }
+
+    public void dartJaguarConstructor() {
+        browserClient = false;
+        outputFolder = "generated-code/dart-jaguar";
+        embeddedTemplateDir = templateDir = "dart-jaguar";
+
+        cliOptions.add(new CliOption(NULLABLE_FIELDS, "Is the null fields should be in the JSON payload"));
+        cliOptions.add(new CliOption(SERIALIZATION_FORMAT, "Choose serialization format JSON or PROTO is supported"));
+
+        typeMapping.put("file", "List<int>");
+        typeMapping.put("binary", "List<int>");
+
+        protoTypeMapping.put("Array", "repeated");
+        protoTypeMapping.put("array", "repeated");
+        protoTypeMapping.put("List", "repeated");
+        protoTypeMapping.put("boolean", "bool");
+        protoTypeMapping.put("string", "string");
+        protoTypeMapping.put("char", "string");
+        protoTypeMapping.put("int", "int32");
+        protoTypeMapping.put("long", "int64");
+        protoTypeMapping.put("short", "int32");
+        protoTypeMapping.put("number", "double");
+        protoTypeMapping.put("float", "float");
+        protoTypeMapping.put("double", "double");
+        protoTypeMapping.put("object", "google.protobuf.Any");
+        protoTypeMapping.put("integer", "int32");
+        protoTypeMapping.put("Date", "google.protobuf.Timestamp");
+        protoTypeMapping.put("date", "google.protobuf.Timestamp");
+        protoTypeMapping.put("File", "bytes");
+        protoTypeMapping.put("file", "bytes");
+        protoTypeMapping.put("binary", "bytes");
+        protoTypeMapping.put("UUID", "string");
+        protoTypeMapping.put("URI", "string");
+        protoTypeMapping.put("ByteArray", "bytes");
     }
 
     @Override
@@ -140,13 +234,168 @@ public class DartClientCodegen extends DefaultCodegen implements CodegenConfig {
 
     @Override
     public String getHelp() {
-        return "Generates a Dart (1.x (deprecated) or 2.x) client library.";
+        return "Generates a Dart client library.";
     }
 
     @Override
     public void processOpts() {
         super.processOpts();
 
+        if (DIO.equals(getLibrary())) {
+            dartDioConstrutor();
+            dartDioProcessOpts();
+        } else if (JAGUAR.equals(getLibrary())) {
+            dartJaguarConstructor();
+            dartJaguarProcessOps();
+        } else { // default
+            dartHttpProcessOps();
+        }
+    }
+
+    public void dartJaguarProcessOps() {
+
+        if (additionalProperties.containsKey(NULLABLE_FIELDS)) {
+            nullableFields = convertPropertyToBooleanAndWriteBack(NULLABLE_FIELDS);
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(NULLABLE_FIELDS, nullableFields);
+        }
+
+        if (additionalProperties.containsKey(SERIALIZATION_FORMAT)) {
+            serialization = ((String) additionalProperties.get(SERIALIZATION_FORMAT));
+            boolean isProto = serialization.equalsIgnoreCase(SERIALIZATION_PROTO);
+            additionalProperties.put(IS_FORMAT_JSON, serialization.equalsIgnoreCase(SERIALIZATION_JSON));
+            additionalProperties.put(IS_FORMAT_PROTO, isProto);
+
+            modelTemplateFiles.put("model.mustache", isProto ? ".proto" : ".dart");
+
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(IS_FORMAT_JSON, true);
+            additionalProperties.put(IS_FORMAT_PROTO, false);
+        }
+
+        if (additionalProperties.containsKey(PUB_NAME)) {
+            this.setPubName((String) additionalProperties.get(PUB_NAME));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_NAME, pubName);
+        }
+        additionalProperties.put(CLIENT_NAME, org.openapitools.codegen.utils.StringUtils.camelize(pubName));
+
+        if (additionalProperties.containsKey(PUB_VERSION)) {
+            this.setPubVersion((String) additionalProperties.get(PUB_VERSION));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_VERSION, pubVersion);
+        }
+
+        if (additionalProperties.containsKey(PUB_DESCRIPTION)) {
+            this.setPubDescription((String) additionalProperties.get(PUB_DESCRIPTION));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_DESCRIPTION, pubDescription);
+        }
+
+        if (additionalProperties.containsKey(USE_ENUM_EXTENSION)) {
+            this.setUseEnumExtension(convertPropertyToBooleanAndWriteBack(USE_ENUM_EXTENSION));
+        } else {
+            // Not set, use to be passed to template.
+            additionalProperties.put(USE_ENUM_EXTENSION, useEnumExtension);
+        }
+
+        if (additionalProperties.containsKey(CodegenConstants.SOURCE_FOLDER)) {
+            this.setSourceFolder((String) additionalProperties.get(CodegenConstants.SOURCE_FOLDER));
+        }
+
+        // make api and model doc path available in mustache template
+        additionalProperties.put("apiDocPath", apiDocPath);
+        additionalProperties.put("modelDocPath", modelDocPath);
+
+        final String libFolder = sourceFolder + File.separator + "lib";
+        supportingFiles.add(new SupportingFile("pubspec.mustache", "", "pubspec.yaml"));
+        supportingFiles.add(new SupportingFile("analysis_options.mustache", "", "analysis_options.yaml"));
+        supportingFiles.add(new SupportingFile("apilib.mustache", libFolder, "api.dart"));
+
+        supportingFiles.add(new SupportingFile("git_push.sh.mustache", "", "git_push.sh"));
+        supportingFiles.add(new SupportingFile("gitignore.mustache", "", ".gitignore"));
+        supportingFiles.add(new SupportingFile("README.mustache", "", "README.md"));
+        supportingFiles.add(new SupportingFile("travis.mustache", "", ".travis.yml"));
+
+        final String authFolder = sourceFolder + File.separator + "lib" + File.separator + "auth";
+        supportingFiles.add(new SupportingFile("auth/api_key_auth.mustache", authFolder, "api_key_auth.dart"));
+        supportingFiles.add(new SupportingFile("auth/basic_auth.mustache", authFolder, "basic_auth.dart"));
+        supportingFiles.add(new SupportingFile("auth/oauth.mustache", authFolder, "oauth.dart"));
+        supportingFiles.add(new SupportingFile("auth/auth.mustache", authFolder, "auth.dart"));
+    }
+
+    public void dartDioProcessOpts() {
+        if (StringUtils.isEmpty(System.getenv("DART_POST_PROCESS_FILE"))) {
+            LOGGER.info("Environment variable DART_POST_PROCESS_FILE not defined so the Dart code may not be properly formatted. To define it, try `export DART_POST_PROCESS_FILE=\"/usr/local/bin/dartfmt -w\"` (Linux/Mac)");
+            LOGGER.info("NOTE: To enable file post-processing, 'enablePostProcessFile' must be set to `true` (--enable-post-process-file for CLI).");
+        }
+
+        if (additionalProperties.containsKey(NULLABLE_FIELDS)) {
+            nullableFields = convertPropertyToBooleanAndWriteBack(NULLABLE_FIELDS);
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(NULLABLE_FIELDS, nullableFields);
+        }
+
+        additionalProperties.put(IS_FORMAT_JSON, true);
+
+        if (additionalProperties.containsKey(PUB_NAME)) {
+            this.setPubName((String) additionalProperties.get(PUB_NAME));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_NAME, pubName);
+        }
+
+        if (!additionalProperties.containsKey(CLIENT_NAME)) {
+            additionalProperties.put(CLIENT_NAME, org.openapitools.codegen.utils.StringUtils.camelize(pubName));
+        }
+
+        if (additionalProperties.containsKey(PUB_VERSION)) {
+            this.setPubVersion((String) additionalProperties.get(PUB_VERSION));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_VERSION, pubVersion);
+        }
+
+        if (additionalProperties.containsKey(PUB_DESCRIPTION)) {
+            this.setPubDescription((String) additionalProperties.get(PUB_DESCRIPTION));
+        } else {
+            //not set, use to be passed to template
+            additionalProperties.put(PUB_DESCRIPTION, pubDescription);
+        }
+
+        if (additionalProperties.containsKey(USE_ENUM_EXTENSION)) {
+            this.setUseEnumExtension(convertPropertyToBooleanAndWriteBack(USE_ENUM_EXTENSION));
+        } else {
+            // Not set, use to be passed to template.
+            additionalProperties.put(USE_ENUM_EXTENSION, useEnumExtension);
+        }
+
+        if (additionalProperties.containsKey(CodegenConstants.SOURCE_FOLDER)) {
+            this.setSourceFolder((String) additionalProperties.get(CodegenConstants.SOURCE_FOLDER));
+        }
+
+        // make api and model doc path available in mustache template
+        additionalProperties.put("apiDocPath", apiDocPath);
+        additionalProperties.put("modelDocPath", modelDocPath);
+
+        final String libFolder = sourceFolder + File.separator + "lib";
+        supportingFiles.add(new SupportingFile("pubspec.mustache", "", "pubspec.yaml"));
+        supportingFiles.add(new SupportingFile("analysis_options.mustache", "", "analysis_options.yaml"));
+        supportingFiles.add(new SupportingFile("apilib.mustache", libFolder, "api.dart"));
+        supportingFiles.add(new SupportingFile("serializers.mustache", libFolder, "serializers.dart"));
+
+        supportingFiles.add(new SupportingFile("gitignore.mustache", "", ".gitignore"));
+        supportingFiles.add(new SupportingFile("README.mustache", "", "README.md"));
+
+    }
+
+    public void dartHttpProcessOps() {
         if (StringUtils.isEmpty(System.getenv("DART_POST_PROCESS_FILE"))) {
             LOGGER.info("Environment variable DART_POST_PROCESS_FILE not defined so the Dart code may not be properly formatted. To define it, try `export DART_POST_PROCESS_FILE=\"/usr/local/bin/dartfmt -w\"` (Linux/Mac)");
             LOGGER.info("NOTE: To enable file post-processing, 'enablePostProcessFile' must be set to `true` (--enable-post-process-file for CLI).");
@@ -575,5 +824,222 @@ public class DartClientCodegen extends DefaultCodegen implements CodegenConfig {
                 LOGGER.error("Error running the command ({}). Exception: {}", command, e.getMessage());
             }
         }
+    }
+
+    public Map<String, Object> dartDioPostProcessOperationsWithModels(Map<String, Object> objs, List<Object> allModels) {
+        objs = super.postProcessOperationsWithModels(objs, allModels);
+        Map<String, Object> operations = (Map<String, Object>) objs.get("operations");
+        List<CodegenOperation> operationList = (List<CodegenOperation>) operations.get("operation");
+
+        Set<String> modelImports = new HashSet<>();
+        Set<String> fullImports = new HashSet<>();
+
+        for (CodegenOperation op : operationList) {
+            op.httpMethod = op.httpMethod.toLowerCase(Locale.ROOT);
+            boolean isJson = true; //default to JSON
+            boolean isForm = false;
+            boolean isMultipart = false;
+            if (op.consumes != null) {
+                for (Map<String, String> consume : op.consumes) {
+                    if (consume.containsKey("mediaType")) {
+                        String type = consume.get("mediaType");
+                        isJson = type.equalsIgnoreCase("application/json");
+                        isForm = type.equalsIgnoreCase("application/x-www-form-urlencoded");
+                        isMultipart = type.equalsIgnoreCase("multipart/form-data");
+                        break;
+                    }
+                }
+            }
+
+            for (CodegenParameter param : op.bodyParams) {
+                if (param.baseType != null && param.baseType.equalsIgnoreCase("Uint8List") && isMultipart) {
+                    param.baseType = "MultipartFile";
+                    param.dataType = "MultipartFile";
+                }
+            }
+
+            op.vendorExtensions.put("isJson", isJson);
+            op.vendorExtensions.put("isForm", isForm);
+            op.vendorExtensions.put("isMultipart", isMultipart);
+
+            Set<String> imports = new HashSet<>();
+            for (String item : op.imports) {
+                if (!modelToIgnore.contains(item.toLowerCase(Locale.ROOT))) {
+                    imports.add(underscore(item));
+                } else if (item.equalsIgnoreCase("Uint8List")) {
+                    fullImports.add("dart:typed_data");
+                }
+            }
+            modelImports.addAll(imports);
+            op.imports = imports;
+        }
+
+        objs.put("modelImports", modelImports);
+        objs.put("fullImports", fullImports);
+
+        return objs;
+    }
+
+    public Map<String, Object> dartJaguarPostProcessOperationsWithModels(Map<String, Object> objs, List<Object> allModels) {
+        objs = super.postProcessOperationsWithModels(objs, allModels);
+        Map<String, Object> operations = (Map<String, Object>) objs.get("operations");
+        List<CodegenOperation> operationList = (List<CodegenOperation>) operations.get("operation");
+
+        Set<String> modelImports = new HashSet<>();
+        Set<String> fullImports = new HashSet<>();
+
+        for (CodegenOperation op : operationList) {
+            op.httpMethod = StringUtils.capitalize(op.httpMethod.toLowerCase(Locale.ROOT));
+            boolean isJson = true; //default to JSON
+            boolean isForm = false;
+            boolean isProto = false;
+            boolean isMultipart = false;
+            if (op.consumes != null) {
+                for (Map<String, String> consume : op.consumes) {
+                    if (consume.containsKey("mediaType")) {
+                        String type = consume.get("mediaType");
+                        isJson = type.equalsIgnoreCase("application/json");
+                        isProto = type.equalsIgnoreCase("application/octet-stream");
+                        isForm = type.equalsIgnoreCase("application/x-www-form-urlencoded");
+                        isMultipart = type.equalsIgnoreCase("multipart/form-data");
+                        break;
+                    }
+                }
+            }
+
+            for (CodegenParameter param : op.allParams) {
+                if (param.baseType != null && param.baseType.equalsIgnoreCase("List<int>") && isMultipart) {
+                    param.baseType = "MultipartFile";
+                    param.dataType = "MultipartFile";
+                }
+            }
+            for (CodegenParameter param : op.formParams) {
+                if (param.baseType != null && param.baseType.equalsIgnoreCase("List<int>") && isMultipart) {
+                    param.baseType = "MultipartFile";
+                    param.dataType = "MultipartFile";
+                }
+            }
+            for (CodegenParameter param : op.bodyParams) {
+                if (param.baseType != null && param.baseType.equalsIgnoreCase("List<int>") && isMultipart) {
+                    param.baseType = "MultipartFile";
+                    param.dataType = "MultipartFile";
+                }
+            }
+
+            op.vendorExtensions.put("isJson", isJson);
+            op.vendorExtensions.put("isProto", isProto);
+            op.vendorExtensions.put("isForm", isForm);
+            op.vendorExtensions.put("isMultipart", isMultipart);
+
+            Set<String> imports = new HashSet<>();
+            for (String item : op.imports) {
+                if (!modelToIgnore.contains(item.toLowerCase(Locale.ROOT))) {
+                    imports.add(underscore(item));
+                }
+            }
+            modelImports.addAll(imports);
+            op.imports = imports;
+
+            String[] items = op.path.split("/", -1);
+            String jaguarPath = "";
+
+            for (int i = 0; i < items.length; ++i) {
+                if (items[i].matches("^\\{(.*)\\}$")) { // wrap in {}
+                    jaguarPath = jaguarPath + ":" + items[i].replace("{", "").replace("}", "");
+                } else {
+                    jaguarPath = jaguarPath + items[i];
+                }
+
+                if (i != items.length - 1) {
+                    jaguarPath = jaguarPath + "/";
+                }
+            }
+
+            op.path = jaguarPath;
+        }
+
+        objs.put("modelImports", modelImports);
+        objs.put("fullImports", fullImports);
+
+        return objs;
+    }
+
+    public Map<String, Object> dartJaguarPostProcessModels(Map<String, Object> objs) {
+        objs = super.postProcessModels(objs);
+        List<Object> models = (List<Object>) objs.get("models");
+        ProcessUtils.addIndexToProperties(models, 1);
+        for (Object _mo : models) {
+            Map<String, Object> mo = (Map<String, Object>) _mo;
+            Set<String> modelImports = new HashSet<>();
+            CodegenModel cm = (CodegenModel) mo.get("model");
+            for (String modelImport : cm.imports) {
+                if (!modelToIgnore.contains(modelImport.toLowerCase(Locale.ROOT))) {
+                    modelImports.add(underscore(modelImport));
+                }
+            }
+
+            for (CodegenProperty p : cm.vars) {
+                String protoType = protoTypeMapping.get(p.openApiType);
+                if (p.isListContainer) {
+                    String innerType = protoTypeMapping.get(p.mostInnerItems.openApiType);
+                    protoType = protoType + " " + (innerType == null ? p.mostInnerItems.openApiType : innerType);
+                }
+                p.vendorExtensions.put("x-proto-type", protoType == null ? p.openApiType : protoType);
+            }
+
+            cm.imports = modelImports;
+            cm.vendorExtensions.put("hasVars", cm.vars.size() > 0);
+        }
+        return objs;
+    }
+
+    public Map<String, Object> dartDioPostProcessModels(Map<String, Object> objs) {
+        objs = super.postProcessModels(objs);
+        List<Object> models = (List<Object>) objs.get("models");
+        ProcessUtils.addIndexToProperties(models, 1);
+        for (Object _mo : models) {
+            Map<String, Object> mo = (Map<String, Object>) _mo;
+            Set<String> modelImports = new HashSet<>();
+            CodegenModel cm = (CodegenModel) mo.get("model");
+            for (String modelImport : cm.imports) {
+                if (importMapping.containsKey(modelImport)) {
+                    modelImports.add(importMapping.get(modelImport));
+                } else {
+                    if (!modelToIgnore.contains(modelImport.toLowerCase(Locale.ROOT))) {
+                        modelImports.add("package:" + pubName + "/model/" + underscore(modelImport) + ".dart");
+                    }
+                }
+            }
+
+            cm.imports = modelImports;
+            cm.vendorExtensions.put("hasVars", cm.vars.size() > 0);
+        }
+        return objs;
+    }
+
+    public void dartDioPostProcessModelProperty(CodegenModel model, CodegenProperty property) {
+        if (nullableFields) {
+            property.isNullable = true;
+        }
+
+        if (property.isListContainer) {
+            //Updates any List properties on a model to a BuiltList. This happens in post processing rather
+            //than type mapping as we only want this to apply to models, not every other class.
+            if ("List".equals(property.baseType)) {
+                property.setDatatype(property.dataType.replaceAll(property.baseType, "BuiltList"));
+                property.setBaseType("BuiltList");
+                model.imports.add("BuiltList");
+            }
+        }
+        if (property.isMapContainer) {
+            //Updates any List properties on a model to a BuiltList. This happens in post processing rather
+            //than type mapping as we only want this to apply to models, not every other class.
+            if ("Map".equals(property.baseType)) {
+                property.setDatatype(property.dataType.replaceAll(property.baseType, "BuiltMap"));
+                property.setBaseType("BuiltMap");
+                model.imports.add("BuiltMap");
+            }
+        }
+
     }
 }
