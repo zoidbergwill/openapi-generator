@@ -27,13 +27,14 @@ public class DartClientOptionsProvider implements OptionsProvider {
     public static final String SORT_PARAMS_VALUE = "true";
     public static final String ENSURE_UNIQUE_PARAMS_VALUE = "true";
     public static final String BROWSER_CLIENT_VALUE = "true";
-    public static final String PUB_NAME_VALUE = "swagger";
+    public static final String PUB_NAME_VALUE = "openapi";
     public static final String PUB_VERSION_VALUE = "1.0.0-SNAPSHOT";
-    public static final String PUB_DESCRIPTION_VALUE = "Swagger API client dart";
+    public static final String PUB_DESCRIPTION_VALUE = "OpenAPI client dart";
     public static final String SOURCE_FOLDER_VALUE = "src";
     public static final String USE_ENUM_EXTENSION = "true";
     public static final String ALLOW_UNICODE_IDENTIFIERS_VALUE = "false";
     public static final String PREPEND_FORM_OR_BODY_PARAMETERS_VALUE = "true";
+    public static final String LIBRARY_VALUE = "dio";
 
     @Override
     public String getLanguage() {
