@@ -1,0 +1,25 @@
+{
+    "name": "{{npmName}}",
+    "version": "{{npmVersion}}",
+    "description": "NodeJS client for {{npmName}}",
+    "repository": "{{gitUserId}}/{{gitRepoId}}",
+    "main": "dist/api.js",
+    "types": "dist/api.d.ts",
+    "scripts": {
+        "clean": "rm -Rf node_modules/ *.js",
+        "build": "tsc",
+        "test": "npm run build && node dist/client.js"
+    },
+    "author": "OpenAPI-Generator Contributors",
+    "license": "Unlicense",
+    "dependencies": {
+        "http-call": "^5.2.5",
+    },
+    "devDependencies": {
+        "typescript": "^2.4.2",
+        "@types/node": "8.10.34"
+    }{{#npmRepository}},
+    "publishConfig": {
+        "registry": "{{npmRepository}}"
+    }{{/npmRepository}}
+}
